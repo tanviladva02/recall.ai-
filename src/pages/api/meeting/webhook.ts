@@ -1,5 +1,5 @@
+import type { NextApiRequest, NextApiResponse } from "next";
 import { getCollection } from "@/common-content/commonContent";
-import { NextApiRequest, NextApiResponse } from "next";
 
 export const config = { api: { bodyParser: false } };
 
@@ -23,31 +23,31 @@ export default async function handler(
 		}
 
 		const type = ev?.event;
-		const ext = ev?.external_id || ev?.data?.bot?.metadata?.external_id;
-		if (!ext) return res.status(200).end("ok"); // nothing to do, but ACK
+		const ext =
+			ev?.external_id ||
+			ev?.data?.external_id ||
+			ev?.data?.bot?.metadata?.external_id ||
+			ev?.data?.recording?.metadata?.external_id;
+		const botId = ev?.data?.bot?.id || ev?.bot_id || ev?.data?.bot_id || null;
 
 		const Bots = await getCollection("RecallBots");
 		const Transcripts = await getCollection("RecallTranscripts");
 		const Recordings = await getCollection("RecallRecordings");
 
-		// Track lifecycle
 		if (type === "bot.status_change") {
 			const status = ev?.data?.status || "unknown";
 			await Bots.updateOne(
 				{ ExternalId: ext },
-				{ $set: { Status: status, LastEventAt: new Date() } },
+				{ $set: { Status: status, LastEventAt: new Date(), BotId: botId } },
 				{ upsert: true }
 			);
-
-			// If done, resolve final assets now
-			if (status === "done") {
-				await resolveAndPersistAssets({ ext, ev, Bots, Recordings });
+			if (status === "done" && ext) {
+				await resolveAndPersistAssets({ ext, botId, Bots, Recordings });
 			}
 			return res.status(200).end("ok");
 		}
 
-		// Real-time finalized segments
-		if (type === "transcript.data") {
+		if (type === "transcript.data" && ext) {
 			const words = ev?.data?.data?.words ?? [];
 			const text = words
 				.map((w: any) => w.text)
@@ -61,7 +61,6 @@ export default async function handler(
 				ev?.data?.data?.participant?.name ||
 				ev?.data?.data?.participant_id ||
 				"Unknown";
-
 			await Transcripts.insertOne({
 				ExternalId: ext,
 				Text: text,
@@ -72,53 +71,54 @@ export default async function handler(
 			});
 			await Bots.updateOne(
 				{ ExternalId: ext },
-				{ $set: { HasTranscript: true, LastEventAt: new Date() } },
+				{
+					$set: { HasTranscript: true, LastEventAt: new Date(), BotId: botId },
+				},
 				{ upsert: true }
 			);
 			return res.status(200).end("ok");
 		}
 
-		// Post-call completion events (some orgs route these explicitly)
-		if (type === "transcript.done" || type === "recording.done") {
-			await resolveAndPersistAssets({ ext, ev, Bots, Recordings });
+		if ((type === "transcript.done" || type === "recording.done") && ext) {
+			await resolveAndPersistAssets({ ext, botId, Bots, Recordings });
 			return res.status(200).end("ok");
 		}
 
-		// Default minimal update
-		await Bots.updateOne(
-			{ ExternalId: ext },
-			{ $set: { LastEventAt: new Date() } },
-			{ upsert: true }
-		);
+		// Minimal fallback update
+		if (ext) {
+			await Bots.updateOne(
+				{ ExternalId: ext },
+				{ $set: { LastEventAt: new Date(), BotId: botId } },
+				{ upsert: true }
+			);
+		}
 		return res.status(200).end("ok");
 	} catch {
-		return res.status(200).end("ok"); // always ACK to prevent retries storm; log internally
+		return res.status(200).end("ok");
 	}
 }
 
-async function resolveAndPersistAssets({ ext, ev, Bots, Recordings }: any) {
+async function resolveAndPersistAssets({ ext, botId, Bots, Recordings }: any) {
 	const apiKey = process.env.RECALL_API_KEY!;
 	const region = process.env.RECALL_REGION!;
 	if (!apiKey || !region) return;
 
-	// Prefer bot id from event; else look up from DB
-	const botIdFromEvent = ev?.data?.bot?.id || ev?.bot_id || ev?.data?.bot_id;
-	let botId = botIdFromEvent;
-	if (!botId) {
+	let id = botId;
+	if (!id) {
 		const botDoc = await Bots.findOne(
 			{ ExternalId: ext },
 			{ projection: { BotId: 1 } }
 		);
-		botId = botDoc?.BotId;
+		id = botDoc?.BotId;
 	}
-	if (!botId) return;
+	if (!id) return;
 
 	const base = `https://${region}.recall.ai/api/v1`;
 	const headers = { authorization: `Token ${apiKey}` };
-
-	const bot = await fetch(`${base}/bot/${botId}`, { headers })
+	const bot = await fetch(`${base}/bot/${id}`, { headers })
 		.then((r) => (r.ok ? r.json() : null))
 		.catch(() => null);
+
 	const transcriptUrl =
 		bot?.media_shortcuts?.transcript?.data?.download_url || null;
 	const mp4Url = bot?.media_shortcuts?.video_mixed_mp4?.download_url || null;
@@ -134,7 +134,7 @@ async function resolveAndPersistAssets({ ext, ev, Bots, Recordings }: any) {
 					transcript_download_url: transcriptUrl,
 					video_mixed_mp4_download_url: mp4Url,
 					audio_mixed_mp3_download_url: mp3Url,
-					bot_id: botId,
+					bot_id: id,
 					resolved_at: new Date().toISOString(),
 				},
 				UpdatedAt: new Date(),
@@ -145,7 +145,14 @@ async function resolveAndPersistAssets({ ext, ev, Bots, Recordings }: any) {
 
 	await Bots.updateOne(
 		{ ExternalId: ext },
-		{ $set: { Status: "done", HasRecordings: true, LastEventAt: new Date() } },
+		{
+			$set: {
+				Status: "done",
+				HasRecordings: true,
+				LastEventAt: new Date(),
+				BotId: id,
+			},
+		},
 		{ upsert: true }
 	);
 }
