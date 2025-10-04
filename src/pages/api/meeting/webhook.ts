@@ -114,7 +114,7 @@ export default async function handler(
 		return res.status(200).send("ok");
 	} catch (err: any) {
 		console.error("Webhook handler error:", err.message);
-		return res.status(200).send("ok"); // Still return 200 to avoid retries
+		return res.status(500).send(err);
 	}
 }
 
