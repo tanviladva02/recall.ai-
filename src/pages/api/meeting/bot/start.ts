@@ -29,7 +29,7 @@ export default async (req: any, res: NextApiResponse) => {
 				.status(405)
 				.json({ success: false, message: "Method not allowed" });
 
-		const userId = req.user!.id;
+		const userId = "HbvsyQHnmzGVuji1WOeJ9";
 		const { eventId, calendarId, options } = req.body || {};
 		if (!eventId || !calendarId) {
 			return res.status(400).json({
