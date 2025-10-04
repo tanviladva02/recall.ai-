@@ -59,7 +59,7 @@ export default async (req: any, res: NextApiResponse) => {
 
 		const apiKey = process.env.RECALL_API_KEY;
 		const region = process.env.RECALL_REGION || "us-west-2";
-		const webhookUrl = `${process.env.DOAMIN}/api/recall/webhook`;
+		const webhookUrl = `${process.env.DOAMIN}/api/meeting/webhook`;
 		if (!apiKey) {
 			return res.status(500).json({
 				success: false,
