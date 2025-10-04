@@ -1,5 +1,5 @@
+import { getCollection } from '@/common-content/commonContent';
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { getCollection } from '@/commonContent/commonContent';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const { externalId } = req.query as { externalId: string };
